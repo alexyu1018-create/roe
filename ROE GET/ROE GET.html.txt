@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EPS → BVPS / ROE 模擬器</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* 確保中文字體顯示正常，並加入 Inter 作為標準字體 */
+    .font-sans {
+      font-family: 'Inter', 'Noto Sans TC', sans-serif;
+    }
+    /* 為表格的偶數行增加輕微背景色 */
+    #tableBody tr:nth-child(even) {
+      /* 使用淺淺的奶茶色系背景 */
+      background-color: #fcfbf8; 
+    }
+  </style>
+</head>
+<!-- 暖色調背景：加深為 bg-stone-200，更有咖啡牛奶的感覺 -->
+<body class="bg-stone-200 p-4 md:p-8 font-sans">
+
+  <!-- Custom Toast Message Area (取代 alert) -->
+  <div id="messageBox" class="fixed top-5 right-5 z-50 p-4 text-white rounded-lg shadow-2xl transition-opacity duration-300 opacity-0 pointer-events-none min-w-[200px] text-center" role="alert"></div>
+
+  <!-- 卡片背景：bg-white，邊框換成暖灰色 -->
+  <div class="max-w-4xl mx-auto bg-white p-6 rounded-2xl shadow-2xl border border-stone-300">
+    <h1 class="text-3xl font-extrabold text-stone-900 mb-6 border-b-2 border-amber-500 pb-2">
+      EPS → BVPS / ROE 成長模擬
+      <span class="text-sm font-normal text-stone-600 block">投資決策輔助工具</span>
+    </h1>
+
+    <!-- 輸入區 -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 mb-6">
+      <div class="input-group">
+        <label for="eps" class="block mb-1 text-sm font-semibold text-stone-700">EPS 預估 (元)</label>
+        <!-- 焦點環和邊框使用更深的 amber 色系 -->
+        <input id="eps" type="number" step="0.01" class="w-full p-3 border border-stone-400 rounded-lg focus:ring-amber-700 focus:border-amber-700 transition duration-150" placeholder="10.00" value="10">
+      </div>
+
+      <div class="input-group">
+        <label for="payout" class="block mb-1 text-sm font-semibold text-stone-700">配息率 (0~1)</label>
+        <input id="payout" type="number" step="0.01" class="w-full p-3 border border-stone-400 rounded-lg focus:ring-amber-700 focus:border-amber-700 transition duration-150" placeholder="0.80" value="0.8">
+      </div>
+
+      <div class="input-group">
+        <label for="bvps" class="block mb-1 text-sm font-semibold text-stone-700">期初每股淨值 BVPS (元)</label>
+        <input id="bvps" type="number" step="0.01" class="w-full p-3 border border-stone-400 rounded-lg focus:ring-amber-700 focus:border-amber-700 transition duration-150" placeholder="50.00" value="50">
+      </div>
+
+      <div class="input-group">
+        <label for="growth" class="block mb-1 text-sm font-semibold text-stone-700">EPS 年成長率 (0~1)</label>
+        <input id="growth" type="number" step="0.01" class="w-full p-3 border border-stone-400 rounded-lg focus:ring-amber-700 focus:border-amber-700 transition duration-150" placeholder="0.10" value="0.1">
+      </div>
+
+      <div class="input-group">
+        <label for="years" class="block mb-1 text-sm font-semibold text-stone-700">模擬年數 (整數)</label>
+        <input id="years" type="number" step="1" class="w-full p-3 border border-stone-400 rounded-lg focus:ring-amber-700 focus:border-amber-700 transition duration-150" placeholder="5" value="5">
+      </div>
+    </div>
+
+    <!-- 按鈕主色調改為濃咖啡色 bg-amber-800 -->
+    <button onclick="simulate()" class="w-full bg-amber-800 text-white p-3 rounded-xl hover:bg-amber-900 transition duration-200 font-bold text-lg shadow-md hover:shadow-lg mb-6">
+      🚀 執行模擬計算
+    </button>
+
+    <!-- 結果區 -->
+    <div id="results" class="hidden">
+      <h2 class="text-2xl font-bold text-stone-800 mb-4">模擬結果與走勢分析</h2>
+
+      <!-- ROE 折線圖 背景改為 bg-stone-100 -->
+      <div class="bg-stone-100 p-4 rounded-xl shadow-inner mb-6">
+        <canvas id="roeChart" class="w-full h-80"></canvas>
+      </div>
+
+      <!-- 結果表格 -->
+      <div class="overflow-x-auto rounded-xl shadow-lg border border-stone-300">
+        <!-- 表格標題改為濃咖啡色 bg-amber-800 -->
+        <table class="table-auto border-collapse w-full text-left text-sm">
+          <thead class="bg-amber-800 text-white">
+            <tr>
+              <th class="p-3">年份</th>
+              <th class="p-3">期末 EPS (元)</th>
+              <th class="p-3">期末 BVPS (元)</th>
+              <th class="p-3">年化 ROE (%)</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody" class="divide-y divide-stone-200"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let chart;
+
+    /**
+     * 顯示自定義的非阻斷式訊息框 (Toast)
+     * @param {string} message - 要顯示的訊息內容
+     * @param {string} type - 訊息類型 ('error' or 'success')
+     */
+    function showMessage(message, type = 'error') {
+        const box = document.getElementById('messageBox');
+        box.textContent = message;
+
+        // 訊息顏色調整：錯誤維持紅色；成功使用暖調的 bg-emerald-600
+        box.classList.remove('bg-red-600', 'bg-emerald-600');
+        if (type === 'error') {
+            box.classList.add('bg-red-600'); 
+        } else {
+            box.classList.add('bg-emerald-600');
+        }
+
+        // Show the box
+        box.classList.remove('opacity-0', 'pointer-events-none');
+        box.classList.add('opacity-100');
+
+        // Hide after 4 seconds
+        setTimeout(() => {
+            box.classList.remove('opacity-100');
+            box.classList.add('opacity-0', 'pointer-events-none');
+        }, 4000);
+    }
+
+    function simulate() {
+      const eps0 = parseFloat(document.getElementById('eps').value);
+      const payout = parseFloat(document.getElementById('payout').value);
+      const bvps0 = parseFloat(document.getElementById('bvps').value);
+      const growth = parseFloat(document.getElementById('growth').value);
+      const years = parseInt(document.getElementById('years').value);
+
+      // 1. 綜合驗證
+      if ([eps0, payout, bvps0, growth, years].some(v => isNaN(v))) {
+        return showMessage("所有欄位都必須填入有效數字。");
+      }
+      if (payout < 0 || payout > 1) {
+        return showMessage("配息率必須在 0 到 1 之間。");
+      }
+      if (bvps0 <= 0 || eps0 <= 0) {
+        return showMessage("期初淨值與 EPS 預估必須為正值。");
+      }
+      if (years <= 0 || !Number.isInteger(years) || years > 15) {
+        return showMessage("模擬年數必須是 1 到 15 之間的整數。");
+      }
+
+      const tableBody = document.getElementById('tableBody');
+      tableBody.innerHTML = '';
+
+      let bvps = bvps0; // 期初 BVPS
+      let eps = eps0;   // 期初 EPS
+      const labels = [];
+      const roeData = [];
+      const bvpsData = [];
+      const epsData = [];
+
+
+      for (let i = 1; i <= years; i++) {
+        // 當期留存盈餘 = EPS * (1 - 配息率)
+        const retained = eps * (1 - payout);
+
+        // 期末 BVPS = 期初 BVPS + 留存盈餘
+        const bvpsEnd = bvps + retained;
+        
+        // 年化 ROE = EPS / 平均股東權益 (期初BVPS + 期末BVPS) / 2
+        const avgBVPS = (bvps + bvpsEnd) / 2;
+        const roe = (eps / avgBVPS) * 100;
+
+        // 記錄數據
+        labels.push(`第 ${i} 年`);
+        roeData.push(roe.toFixed(2));
+        bvpsData.push(bvpsEnd.toFixed(2));
+        epsData.push(eps.toFixed(2));
+
+        // 寫入表格
+        const row = document.createElement('tr');
+        // 滑鼠懸停效果改為淺琥珀色
+        row.classList.add('hover:bg-amber-50', 'transition', 'duration-100');
+        row.innerHTML = `<td class="p-3 font-semibold">${i}</td>
+                         <td class="p-3">${eps.toFixed(2)}</td>
+                         <td class="p-3">${bvpsEnd.toFixed(2)}</td>
+                         <!-- ROE 數字顏色改為深咖啡色 text-amber-800 -->
+                         <td class="p-3 font-bold text-amber-800">${roe.toFixed(2)}%</td>`;
+        tableBody.appendChild(row);
+
+        // 更新為下一期期初值 (期末 BVPS 成為下一期的期初 BVPS)
+        bvps = bvpsEnd;
+        
+        // 計算下一期 EPS
+        eps = eps * (1 + growth);
+      }
+
+      // 顯示結果區塊
+      document.getElementById('results').classList.remove('hidden');
+
+      // 繪製 ROE 折線圖
+      const ctx = document.getElementById('roeChart').getContext('2d');
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '年化 ROE (%)',
+            data: roeData,
+            // 圖表線條顏色改為濃咖啡色
+            borderColor: 'rgb(120, 53, 15)', // 接近 amber-900
+            backgroundColor: 'rgba(234, 179, 8, 0.2)', // 淺琥珀色背景填充
+            fill: true,
+            tension: 0.3,
+            pointRadius: 5
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top',
+            },
+            title: {
+                display: true,
+                text: '模擬 ROE 變化趨勢',
+                font: { size: 16, weight: 'bold' }
+            }
+          },
+          scales: {
+            y: { 
+                beginAtZero: false,
+                title: { display: true, text: 'ROE (%)' }
+            },
+            x: {
+                title: { display: true, text: '年份' }
+            }
+          }
+        }
+      });
+       showMessage("模擬計算完成！", 'success');
+    }
+  </script>
+</body>
+</html>
